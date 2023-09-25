@@ -1,0 +1,3 @@
+#!/usr/bin/env bash
+x=barcode07_ITSx.summary.txt
+grep -P '\t' $x | tr -d ' ' | sed 's/.*file:/itsx/; s/.*ITSbyITSx:/its/;s/.*mainstrand:/its_plus/; ;s/.*tarystrand:/its_minus/; ;s/.*chimericbyITSx:/chimeric/; s/://'"

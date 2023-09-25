@@ -1,0 +1,210 @@
+* Devel 
+** TODOs
+- [ ] Q/S filter
+
+- [ ] harmonize taxonomy of silva and unite, e.g. at class: Silva-Embryophyta <> UNITE Eudicotyledonae
+- [ ] remove variations if "Incertae sedis", e.g. lowercase "incertae sedis" or "Fungi_cls_incertae_sedis"
+
+- [ ] length-filter ITSx regions, esp. for 18S and 28S there should be clear outliers
+- [X] run ITSx with fungal (+higher-plant) profiles only: try =-t f,t= (little impact, maybe faster)
+- [X] run ITSx faster/less sensitive with =--heuristics T= (little impact, maybe faster)
+- [ ] check "single domain" ITS. Currently I get ~1700 SSU but only 1400 ITS in
+  FRODO data. But ITS is nice for classification. Might just be missing because
+  28S is not picked up on
+- [ ] relax ITSx specificity (partials, etc. expected here: try =-E 1e3= to allow more errors in reads
+  - -E makes things slower...
+- [ ] ITSx summary seems buggy - detected ITS do not match fasta seqs (sometimes
+  bigger, sometimes a lot smaller, might be multithreading issue)
+
+- [ ] 
+
+** databases & benchmark
+*** Unite and Silva (sintax-compatible)
+
+TODO: "Incertae sedis" should probably completely removed for this classifier?
+
+#+begin_src sh
+# create a database for --sintax wiht following header convention
+# >X80725_S000004313;tax=d:Bacteria,p:Proteobacteria,c:Gammaproteobacteria,o:Enterobacteriales,f:Enterobacteriaceae,g:Escherichia/Shigella,s:Escherichia_coli
+# - change rank prefix from r__ to r:
+# - change ; to ,!
+# - remove non-ascii from ID
+pv dbs/unite.fa | perl -pe 'if(/^>/){s/\|k__/;tax=k:/; s/\|/_/g; s/;(\w)__/,$1:/g; s/[^[:ascii:]]/X/g; s/,\w:Incertae sedis//g; s/ /_/g}' > unite-sintax.fa
+pv dbs/silva.fa | seqkit seq --rna2dna | perl -pe 'if(/^>/){s/k__/;tax=k:/; s/\|/_/g; s/;(\w)__/,$1:/g; s/[^[:ascii:]]/X/g,  s/,\w:Incertae sedis//g; s/ /_/g}' > ssu-silva-sintax.fa
+#+end_src
+
+
+*** FRODO database - clean and reformat
+- [X] remove ITSx problematic operons
+- [X] add sintax lineage
+Lu et a. 2022: "Nanopore sequencing of full rRNA operon improves resolution in
+mycobiome analysis and reveals high diversity in both human gut and
+environments"
+
+https://github.com/IsaacYing/Frodo
+
+FRODO has a population of "chimeric" operons based on ITSx annotation. These
+sequences are all ~8kb, as opposed to expected 5-6kb, have an LSU annotation at
+~300 bp and a SSU annotation that spans the entire fragment.
+
+ITSx apparently cannot properly handle multiple operons on the same sequence. It
+seems to assume everything in front of the SSU anchor is SSU, and everything
+after the LSU is LSU. 
+
+Seems FRODO (which uses barrnap) extracted the region beteen two adjacent rRNA
+operons, which throws of ITSx. 
+
+#+DOWNLOADED: file:///home/thackl/Research/Endophyte-complex/fungi-amplicon/fungi-classify/Frodo/frodo-chimeric-example.png @ 2023-09-22 09:11:03
+[[file:img/frodo-chimeric-example_2023-09-22_09-11-03.png]]
+
+>-ITS-5.8-ITS2-|--------LSU--------|....intergenic....|------- SSU |
+
+#+begin_src sh
+grep m/frodo_ITSx.positions.txt
+seqkit grep -v <(cut -f1 frodo_ITSx.problematic.txt) > frodo-clean.fa
+# extract taxid
+perl -pe 's/taxid_(\d+)_seq_(.*)/$2 db=frodo tax_id=$1/ if /^>/' frodo-clean.fa > frodo-tax.fa
+
+# add propper lineage
+paste 
+  <(seqkit fx2tab frodo-tax.fa)
+  <(grep -oP '(?<=tax_id=)\S+' frodo-tax.fa | taxonkit lineage | taxonkit reformat -P | sed 's/.*\t/lineage=/; s/ /_/g') |
+  tsvtk cut -f1,4,2 | sed 's/\t/ /' | seqkit tab2fx > frodo.fa
+
+perl -pe 'if(/^>/){s/ .*lineage=k__/;tax=k:/; s/;(\w)__/,$1:/g; s/[^[:ascii:]]/X/g; s/\w:,//g; s/ /_/g}' frodo-lineage.fa > frodo-sintax.fa
+
+seq-error -e 7,1,2 frodo.fa > frodo-err10.fa 
+seq-error -e 4,.5,.5 frodo.fa > frodo-err05.fa
+
+#+end_src
+
+*** CuReSim-LoRM: A Tool to Simulate Metabarcoding Long Reads
+
+* Classification (vsearch, minimap2)
+*VSEARCH*: Promising tool for both clustering (if necessary) and taxonomic
+assignment. Widely used in 16S world.
+
+https://github.com/torognes/vsearch#packages-plugins-and-wrappers
+
+*CNS-clustering* - clustering of reads pre-analysis to obtain error-reduced
+polished consensus sequences. For now I will ignore this. It's a) not clear if
+necessary, i.e. of nanopore errors would severly affect classification, and b)
+if clusters could be created in a way that would not mix different species and
+create artificial consensus cluster
+
+*OTU-clustering* - downstream analysis to gauge diversity of sample. Not
+ required at this point
+
+*tax-classification* How to assign taxonomy to a read, polished read or
+cluster? Need to account for effects of ITS vs. SSU/LSU
+
+** vsearch --sintax  - looks promising
+
+- yeast ITS vs UNITE
+- yeast SSU vs SILVA
+
+Consistently classifies as "k:Fungi", regardless of --sintax_cutoff
+
+ => k:Fungi *not wrong, but quite unspecific*...
+
+#+begin_src sh
+# classify a yeast its sequence
+seqkit grep -rp 'Saccharomyces_cerevisiae\|MG101823' unite-yeasts.fa > its.fa                                          
+vsearch --sintax its.fa --db unite-sintax.fa --tabbedout vsearch-sintax_its_unite.tsv --sintax_cutoff 0.9
+
+seqkit grep -rp 'Saccharomyces_cerevisiae' silva_f__Saccharomycetaceae.fa | seqkit head -n1 > ssu.fa                     
+vsearch --sintax ssu.fa --db ssu-silva-sintax.fa --tabbedout  vsearch-sintax_ssu-silva.tsv --sintax_cutoff 0.9
+
+
+#+end_src
+
+
+
+** vsearch --usearch_global
+
+#+begin_src sh
+vsearch --id 0.8 --usearch_global its.fa --db unite-sintax.fa --blast6out vsearch-usearch.o6
+vsearch --id 0.9 --maxaccepts 5 --usearch_global its.fa --db unite-sintax.fa --blast6out vsearch-usearch.o6
+vsearch --id 0.8 --maxaccepts 20 --weak_id 0.8 --usearch_global its.fa --db unite-sintax.fa --blast6out vsearch-usearch.o6
+#+end_src
+
+** Ting's data with vsearch and minimap2
+
+Latest thoughts (that need further verification).
+- ITS-based classification even with nanopore error seems to work quite well for
+  host after ITS extraction
+- SSU classification seems to be tricky, esp. since Vinca family/genus are not
+  in SILVA
+*** 2303
+#+begin_src sh
+vsearch --sintax fa2303-bc01_itsx.SSU.fasta --sintax_cutoff .25 --db ssu-silva-sintax.fa --tabbedout fa2303-bc01_itsx.SSU_vsearch-sintax_silva.tsv
+cut -f4 fa2303-bc01_itsx.SSU_vsearch-sintax_silva.tsv | count
+     14 
+k:Chloroplastida,p:Phragmoplastophyta,c:Embryophyta	405
+k:Chloroplastida,p:Phragmoplastophyta,c:Embryophyta,o:Cucurbitales,g:Cucumis	1
+k:Chloroplastida,p:Phragmoplastophyta,c:Embryophyta,o:Gentianales	169
+k:Chloroplastida,p:Phragmoplastophyta,c:Embryophyta,o:Liliopsida,g:Oryza,s:Oryza_longistaminata_LQBC01000268.218859.220154_Eukaryota	1
+k:Chloroplastida,p:Phragmoplastophyta,c:Embryophyta,o:Malvales,g:Gossypium	1
+k:Chloroplastida,p:Phragmoplastophyta,c:Embryophyta,o:Proteales,g:Platanus,s:Platanus_occidentalis_U42794.1.1734_Eukaryota	1
+k:Chloroplastida,p:Phragmoplastophyta,c:Embryophyta,o:Solanales	1
+k:Chloroplastida,p:Phragmoplastophyta,c:Embryophyta,s:Candidatus_Paraburkholderia_schumannianae_LFJH01000092.5757.7556_Eukaryota	1
+# no Vinca family or genus in silva SSU => poor assignment at low level
+
+
+minimap2 -x map-ont -n 5 --secondary=no ssu-silva-sintax.fa <(perl -pe 's/ /_/g if /^>/' fa2303-bc01_itsx.SSU.fasta) > foo.paf
+grep -oP 'k:..*s:' foo.paf | count | sort -k2,2g             
+k:Animalia,p:Arthropoda,c:Malacostraca,o:Incertae_sedis,f:Incertae_sedis,g:Incertae_sedis,s:	1
+k:Animalia,p:Cnidaria,c:Anthozoa,o:Incertae_sedis,f:Incertae_sedis,g:Incertae_sedis,s:	1
+k:Chloroplastida,p:Phragmoplastophyta,c:Embryophyta,o:Boraginales,f:Incertae_sedis,g:Cryptantha,s:	1
+k:Chloroplastida,p:Phragmoplastophyta,c:Embryophyta,o:Brassicales,f:Incertae_sedis,g:Tarenaya,s:	1
+k:Chloroplastida,p:Phragmoplastophyta,c:Embryophyta,o:Cucurbitales,f:Incertae_sedis,g:Cucumis,s:	1
+k:Chloroplastida,p:Phragmoplastophyta,c:Embryophyta,o:Gentianales,f:Incertae_sedis,g:Chelonanthus,s:	1
+k:Chloroplastida,p:Phragmoplastophyta,c:Embryophyta,o:Gentianales,f:Incertae_sedis,g:Neolamarckia,s:	1
+k:Chloroplastida,p:Phragmoplastophyta,c:Embryophyta,o:Lamiales,f:Incertae_sedis,g:Drymonia,s:	1
+k:Chloroplastida,p:Phragmoplastophyta,c:Embryophyta,o:Oxalidales,f:Incertae_sedis,g:Averrhoa,s:	1
+k:Chloroplastida,p:Phragmoplastophyta,c:Embryophyta,o:Proteales,f:Incertae_sedis,g:Platanus,s:	1
+k:Chloroplastida,p:Phragmoplastophyta,c:Embryophyta,o:Rosales,f:Incertae_sedis,g:Elaeagnus,s:	1
+k:Chloroplastida,p:Phragmoplastophyta,c:Embryophyta,o:Solanales,f:Incertae_sedis,g:Capsicum,s:	1
+k:Chloroplastida,p:Phragmoplastophyta,c:Embryophyta,o:Solanales,f:Incertae_sedis,g:Solanum,s:	1
+k:Fungi,p:Ascomycota,c:Sordariomycetes,o:Hypocreales,f:Stachybotryaceae,g:Myrothecium,s:	1
+k:Fungi,p:Basidiomycota,c:Agaricomycetes,o:Agaricales,f:Incertae_sedis,g:Incertae_sedis,s:	1
+k:Incertae_Sedis,p:Ancyromonadida,c:Incertae_sedis,o:Incertae_sedis,f:Incertae_sedis,g:Ancyromonas,s:	1
+k:Incertae_Sedis,p:Incertae_sedis,c:Incertae_sedis,o:Incertae_sedis,f:Incertae_sedis,g:Telonema,s:	1
+k:Rhodophyceae,p:Florideophycidae,c:Rhodymeniophycidae,o:Incertae_sedis,f:Incertae_sedis,g:Gelidium,s:	1
+k:Chloroplastida,p:Phragmoplastophyta,c:Embryophyta,o:Fabales,f:Incertae_sedis,g:Ammopiptanthus,s:	2
+k:Chloroplastida,p:Phragmoplastophyta,c:Embryophyta,o:Liliopsida,f:Incertae_sedis,g:Campynemanthe,s:	2
+k:Chloroplastida,p:Phragmoplastophyta,c:Embryophyta,o:Liliopsida,f:Incertae_sedis,g:Triticum,s:	2
+k:Chloroplastida,p:Phragmoplastophyta,c:Embryophyta,o:Malpighiales,f:Incertae_sedis,g:Hevea,s:	2
+k:Chloroplastida,p:Phragmoplastophyta,c:Embryophyta,o:Sapindales,f:Incertae_sedis,g:Citrus,s:	2
+k:Incertae_sedis,p:Cyanobacteria,c:Cyanobacteriia,o:Chloroplast,f:Incertae_sedis,g:Incertae_sedis,s:	2
+k:Incertae_sedis,p:Firmicutes,c:Bacilli,o:Bacillales,f:Bacillaceae,g:Bacillus,s:	2
+k:Chloroplastida,p:Phragmoplastophyta,c:Embryophyta,o:Liliopsida,f:Incertae_sedis,g:Aphyllanthes,s:	3
+k:Chloroplastida,p:Phragmoplastophyta,c:Embryophyta,o:Solanales,f:Incertae_sedis,g:Ipomoea,s:	3
+k:Incertae_sedis,p:Proteobacteria,c:Gammaproteobacteria,o:Xanthomonadales,f:Xanthomonadaceae,g:Stenotrophomonas,s:	3
+k:Rhizaria,p:Retaria,c:Foraminifera,o:Rotaliida,f:Pseudoparrellidae,g:Epistominella,s:	3
+k:Chloroplastida,p:Phragmoplastophyta,c:Embryophyta,o:Gentianales,f:Incertae_sedis,g:Exochaenium,s:	4
+k:Chloroplastida,p:Phragmoplastophyta,c:Embryophyta,o:Solanales,f:Incertae_sedis,g:Nicotiana,s:	6
+k:Chloroplastida,p:Phragmoplastophyta,c:Embryophyta,o:Gentianales,f:Incertae_sedis,g:Swertia,s:	12
+k:Chloroplastida,p:Phragmoplastophyta,c:Embryophyta,o:Gentianales,f:Incertae_sedis,g:Asclepias,s:	21
+k:Chloroplastida,p:Phragmoplastophyta,c:Embryophyta,o:Incertae_sedis,f:Incertae_sedis,g:Incertae_sedis,s:	30
+k:Chloroplastida,p:Phragmoplastophyta,c:Embryophyta,o:Gentianales,f:Incertae_sedis,g:Gelsemium,s:	32
+k:Chloroplastida,p:Phragmoplastophyta,c:Embryophyta,o:Fabales,f:Incertae_sedis,g:Vigna,s:	76
+k:Chloroplastida,p:Phragmoplastophyta,c:Embryophyta,o:Gentianales,f:Incertae_sedis,g:Rhazya,s:	181
+k:Chloroplastida,p:Phragmoplastophyta,c:Embryophyta,o:Gentianales,f:Incertae_sedis,g:Ophiorrhiza,s:	300
+
+vsearch --strand both --sintax fa2303-bc01_itsx.ITS1.fasta --db unite-sintax.fa --tabbedout bar.tsv
+grep -oP 's:..*?\b' bar.tsv | count | sort -k2,2g
+s:Cosmospora_stegonsporii	1
+s:Vinca_major	226
+# =>  226 out of 250 ITS1 get species assignment Vinca major, 1 misassigned, 23 unassigned
+
+#+end_src
+*** 
+
+#+begin_src sh
+rsync -avP funion:~/epi2melabs-data/Amplicon_20230821/pass ting-20230821
+for bc in `ls -d *`; do
+  echo $bc; seqkit fq2fa $bc/*.fastq > $bc.fa;
+done;  
+
+#+end_src

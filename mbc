@@ -1,0 +1,74 @@
+#!/usr/bin/env python3
+"""mbc
+
+Please cite:
+
+Usage:
+  mbc [options] [--snake args] [<reads.fx> ...]
+  mbc --setup-databases [--snake args]
+
+Options:
+  -o --out out           Output directory [default: mbc-%Y%m%d-%H%M%S]
+                         
+  --setup-databases      Download and prepare reference databases. This can take a
+                         few hours. Configure paths in config.yaml. See documentation
+                         for alternative database setup options.
+                         
+  -s --snake args        Additional arguments to pass through to snakemake
+                         [default: --cores all --keep-going]
+                         
+  -h --help              Show this screen.
+  --version              Show version.
+
+Documentation & Support:
+  https://github.com/thackl/mbc
+"""
+
+import os
+import glob
+import subprocess
+import time
+import sys
+import re
+from docopt import docopt
+
+if len(sys.argv) == 1:
+    sys.argv.append('-h')
+
+opt = docopt(__doc__, version='mbc v0.2.0', options_first=True)
+print(opt)
+# establish snakemake workflow and out dir
+out = time.strftime(opt["--out"])
+out = os.path.abspath(out)
+
+# start workflow
+wf_dir  = os.path.dirname(os.path.abspath(__file__))
+
+if opt["--setup-databases"]:
+    cmd='snakemake setup' + f' {opt["--snake"]} --config wf_dir={wf_dir}'
+    print(cmd)
+    subprocess.run(cmd, shell=True, cwd=wf_dir)
+    sys.exit()
+
+
+# prep working dir and input
+data_dir=os.path.join(out, "data/")
+os.makedirs(data_dir, exist_ok=True)
+
+if opt["<reads.fx>"]:
+    for fx in opt["<reads.fx>"]:
+        fx_src=os.path.abspath(fx)
+        fx_dst=os.path.join(data_dir, os.path.basename(fx))
+        if not fx_src == fx_dst and not os.path.exists(fx_dst):
+            os.symlink(fx_src, fx_dst)
+
+cmd='snakemake' + f' --directory {out} {opt["--snake"]} --config wf_dir={wf_dir}'
+print(cmd)
+subprocess.run(cmd, shell=True, cwd=wf_dir)
+
+
+cmd='csvtk pretty -t seq-stats.tsv'
+print("\nInput stats:\n")
+subprocess.run(cmd, shell=True, cwd=out)
+
+

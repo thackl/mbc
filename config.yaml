@@ -1,0 +1,2 @@
+db_dir: "databases" # relative to workflow base or absolute
+itsx: "--detailed_results T --heuristics T -t f,t --save_regions SSU,ITS1,5.8S,ITS2,LSU" 
