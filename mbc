@@ -4,7 +4,7 @@
 Please cite:
 
 Usage:
-  mbc [options] [--snake args] [<reads.fx> ...]
+  mbc [options] [--snake args] [<samples.tsv>]
   mbc --setup-databases [--snake args]
 
 Options:
@@ -43,6 +43,7 @@ out = os.path.abspath(out)
 
 # start workflow
 wf_dir  = os.path.dirname(os.path.abspath(__file__))
+samples = os.path.abspath(opt["<samples.tsv>"])
 
 if opt["--setup-databases"]:
     cmd='snakemake setup' + f' {opt["--snake"]} --config wf_dir={wf_dir}'
@@ -50,24 +51,11 @@ if opt["--setup-databases"]:
     subprocess.run(cmd, shell=True, cwd=wf_dir)
     sys.exit()
 
-
-# prep working dir and input
-data_dir=os.path.join(out, "data/")
-os.makedirs(data_dir, exist_ok=True)
-
-if opt["<reads.fx>"]:
-    for fx in opt["<reads.fx>"]:
-        fx_src=os.path.abspath(fx)
-        fx_dst=os.path.join(data_dir, os.path.basename(fx))
-        if not fx_src == fx_dst and not os.path.exists(fx_dst):
-            os.symlink(fx_src, fx_dst)
-
-cmd='snakemake' + f' --directory {out} {opt["--snake"]} --config wf_dir={wf_dir}'
+cmd='snakemake' + f' --directory {out} {opt["--snake"]} --config samples={samples} wf_dir={wf_dir}'
 print(cmd)
 subprocess.run(cmd, shell=True, cwd=wf_dir)
 
-
-cmd='csvtk pretty -t seq-stats.tsv'
+cmd='csvtk pretty -tr seq-stats.tsv'
 print("\nInput stats:\n")
 subprocess.run(cmd, shell=True, cwd=out)
 

@@ -8,19 +8,23 @@ Usage:
   seq-stats.R <out.tsv> <seqkit-stats.tsv>...
 ' -> doc
 opt <- docopt(doc)
-#read_tsv("/home/thackl/Research/Endophyte-complex/fungi-amplicon/fungi-classify/Frodo/n/seq-stats-detailed.tsv")
+
+#seq_files <- "/home/thackl/Research/Endophyte-complex/fungi-amplicon/fungi-classify/mbc/examples/n/seq-stats-detailed.tsv"
 seq_files <- opt[["<seqkit-stats.tsv>"]]
+
 s0 <- read_tsv(seq_files)
 s1 <- s0 |> 
   mutate(
-    region = str_extract(file, "[^.]+.fasta") |>
+    sample = str_extract(file, "[^/]+$") |> 
+      str_remove("(_ITSx.*|_filt)?.[^.]+(\\..z)?$"),
+    step = str_extract(file, "[^.]+.fasta") |>
       str_remove(".fasta") |>
-      str_replace("full", "its") |> 
-      str_replace("^", "itsx_") |>  
-      replace_na("total"),
-    sample = str_remove(basename(file), "\\.fa$|_ITSx.*")) |> 
-  select(sample, region, n=num_seqs) |> 
-  pivot_wider(names_from=region, values_from=n) |> 
+      str_replace("full", "its"),
+    step = ifelse(str_detect(file, "_filt.fa"), "filtered", step) |> 
+      replace_na("input")) |> 
+  select(sample, step, n=num_seqs) |> 
+  pivot_wider(names_from=step, values_from=n) |> 
   arrange(sample)
+s1
 
 write_tsv(s1, opt[["<out.tsv>"]])

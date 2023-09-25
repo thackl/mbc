@@ -15,18 +15,49 @@ dbs=config["db_dir"]
 if not os.path.isabs(dbs):
     dbs=os.path.join(wf_dir, dbs)
 
-X, = glob_wildcards("data/{x}.fa")
+# read samples
+def read_samples():
+    samples_tsv = config["samples"]
+    print(samples_tsv)
+    df = pd.read_csv(samples_tsv, sep="\t")
+    files = df["#file"].values.tolist()
+    # adjust paths relative to sample tsv
+    paths = []
+    for file in files:
+        if not os.path.isabs(file):
+           file=os.path.join(os.path.dirname(samples_tsv), file)
+        paths.append(file)
+
+    # get ids, remove extension with optional compression
+    files = [os.path.basename(file) for file in files]
+    ids = [re.sub("\.[^.]+(\..z)?$", "", file) for file in files]
+    df["id"] = ids
+    df["path"] = paths
+    return(df.to_dict("list"))
+
+SAMPLES = read_samples()
+print(SAMPLES)
+import sys
+
+X = SAMPLES["id"]
+print("Sample table:\n",  SAMPLES)
+IDMAP = dict(zip(SAMPLES["id"], SAMPLES["path"]))
+MIMAP = dict(zip(SAMPLES["id"], SAMPLES["min_length"]))
+MAMAP = dict(zip(SAMPLES["id"], SAMPLES["max_length"]))
+print(MIMAP)
 
 ## Pseudo-rules
 rule all:
-    input: expand("{x}_{region}_vsearch-sintax.tsv", x=X, region=["ITS" ,"SSU"]),
-           expand("{x}_{region}_minimap2.paf", x=X, region=["ITS" ,"SSU"]),
+    input: expand("vsearch/{x}_{region}_vsearch-sintax.tsv", x=X, region=["ITS" ,"SSU"]),
+           expand("minimap2/{x}_{region}_minimap2.paf", x=X, region=["ITS" ,"SSU"]),
            "seq-stats.tsv"
            
 
 rule stats:
-    input: expand("data/{x}.fa", x=X),
-           expand("{x}_ITSx.{region}.fasta", x=X, region=["full", "SSU", "LSU", "5_8S"])
+    input:
+        SAMPLES["path"],
+        expand("prefiltered/{x}_filt.fa", x=X),
+        expand("itsx/{x}_ITSx.{region}.fasta", x=X, region=["full", "SSU", "LSU", "5_8S"])
     output:
         det="seq-stats-detailed.tsv",
         sum="seq-stats.tsv"
@@ -35,12 +66,24 @@ rule stats:
         "{scripts}/seq-stats.R {output.sum} {output.det}"
            
 ## analysis -----------------------------------------------------------------##
+
+rule prefilter:
+    input: lambda wildcards: IDMAP[wildcards.x]
+    output:
+        fa="prefiltered/{x}_filt.fa"
+    params:
+        m = lambda wildcards: MIMAP[wildcards.x],
+        M = lambda wildcards: MAMAP[wildcards.x]
+    shell:
+        "seqkit fq2fa {input} | "
+        "seqkit seq -m {params.m} -M {params.M} -o {output}"
+
 rule extract_marker_itsx:
-    input: "data/{x}.fa"
-    output: multiext("{x}_ITSx", ".full.fasta", ".SSU.fasta", ".LSU.fasta", ".5_8S.fasta", ".summary.txt")
+    input: "prefiltered/{x}_filt.fa"
+    output: multiext("itsx/{x}_ITSx", ".full.fasta", ".SSU.fasta", ".LSU.fasta", ".5_8S.fasta", ".summary.txt")
             # ".5_8S.fasta", ".chimeric.fasta", ".ITS1.fasta", ".ITS2.fasta", 
     params:
-        pre="{x}_ITSx"
+        pre="itsx/{x}_ITSx"
     threads: workflow.cores
     shell:
         "ITSx {config[itsx]} -i {input} -o {params.pre} --cpu {threads};"
@@ -61,26 +104,26 @@ rule extract_marker_itsx:
         
 
 rule classify_its_vsearch:
-    input: "{x}_ITSx.full.fasta"
-    output: "{x}_ITS_vsearch-sintax.tsv"
+    input: "itsx/{x}_ITSx.full.fasta"
+    output: "vsearch/{x}_ITS_vsearch-sintax.tsv"
     shell:
         "vsearch --sintax {input} --db {dbs}/its-unite-sintax.udb --tabbedout {output}"
 
 rule classify_ssu_vsearch:
-    input: "{x}_ITSx.SSU.fasta"
-    output: "{x}_SSU_vsearch-sintax.tsv"
+    input: "itsx/{x}_ITSx.SSU.fasta"
+    output: "vsearch/{x}_SSU_vsearch-sintax.tsv"
     shell:
         "vsearch --sintax {input} --db {dbs}/ssu-silva-sintax.udb --tabbedout {output}"
 
 rule classify_its_minimap2:
-    input: "{x}_ITSx.full.fasta"
-    output: "{x}_ITS_minimap2.paf"
+    input: "itsx/{x}_ITSx.full.fasta"
+    output: "minimap2/{x}_ITS_minimap2.paf"
     shell:
         "minimap2 -cx map-ont -n 5 --secondary=no {dbs}/its-unite-sintax.mmi {input} > {output}"
 
 rule classify_ssu_minimap2:
-    input: "{x}_ITSx.SSU.fasta"
-    output: "{x}_SSU_minimap2.paf"
+    input: "itsx/{x}_ITSx.SSU.fasta"
+    output: "minimap2/{x}_SSU_minimap2.paf"
     shell:
         "minimap2 -cx map-ont -n 5 --secondary=no {dbs}/ssu-silva-sintax.fa {input} > {output}"
 
