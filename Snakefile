@@ -16,46 +16,25 @@ if not os.path.isabs(dbs):
     dbs=os.path.join(wf_dir, dbs)
 
 # read samples
-def read_samples():
-    samples_tsv = config["samples"]
-    print(samples_tsv)
-    df = pd.read_csv(samples_tsv, sep="\t")
-    files = df["#file"].values.tolist()
-    # adjust paths relative to sample tsv
-    paths = []
-    for file in files:
-        if not os.path.isabs(file):
-           file=os.path.join(os.path.dirname(samples_tsv), file)
-        paths.append(file)
-
-    # get ids, remove extension with optional compression
-    files = [os.path.basename(file) for file in files]
-    ids = [re.sub("\.[^.]+(\..z)?$", "", file) for file in files]
-    df["id"] = ids
-    df["path"] = paths
-    return(df.to_dict("list"))
-
-SAMPLES = read_samples()
-print(SAMPLES)
-import sys
-
-X = SAMPLES["id"]
-print("Sample table:\n",  SAMPLES)
-IDMAP = dict(zip(SAMPLES["id"], SAMPLES["path"]))
-MIMAP = dict(zip(SAMPLES["id"], SAMPLES["min_length"]))
-MAMAP = dict(zip(SAMPLES["id"], SAMPLES["max_length"]))
-print(MIMAP)
+SAMPLES = pd.read_csv("samples.tsv", sep="\t").to_dict("list")
+X = SAMPLES["sample"]
+Y = [x + "_" + m for x,m in zip(X, SAMPLES["marker"])]
+print(Y)
+IDMAP = dict(zip(X, SAMPLES["#file"]))
+MIMAP = dict(zip(X, SAMPLES["min_length"]))
+MAMAP = dict(zip(X, SAMPLES["max_length"]))
 
 ## Pseudo-rules
 rule all:
-    input: expand("vsearch/{x}_{region}_vsearch-sintax.tsv", x=X, region=["ITS" ,"SSU"]),
-           expand("minimap2/{x}_{region}_minimap2.paf", x=X, region=["ITS" ,"SSU"]),
-           "seq-stats.tsv"
+    input:
+        #expand("vsearch/{x}_{region}_vsearch-sintax.tsv", x=X, region=["ITS" ,"SSU"]),
+        expand("minimap2/{y}_minimap2.paf", y=Y)
+        #"seq-stats.tsv"
            
 
 rule stats:
     input:
-        SAMPLES["path"],
+        SAMPLES["#file"],
         expand("prefiltered/{x}_filt.fa", x=X),
         expand("itsx/{x}_ITSx.{region}.fasta", x=X, region=["full", "SSU", "LSU", "5_8S"])
     output:
@@ -106,25 +85,36 @@ rule extract_marker_itsx:
 rule classify_its_vsearch:
     input: "itsx/{x}_ITSx.full.fasta"
     output: "vsearch/{x}_ITS_vsearch-sintax.tsv"
+    threads: workflow.cores
     shell:
         "vsearch --sintax {input} --db {dbs}/its-unite-sintax.udb --tabbedout {output}"
 
 rule classify_ssu_vsearch:
     input: "itsx/{x}_ITSx.SSU.fasta"
     output: "vsearch/{x}_SSU_vsearch-sintax.tsv"
+    threads: workflow.cores
     shell:
         "vsearch --sintax {input} --db {dbs}/ssu-silva-sintax.udb --tabbedout {output}"
 
 rule classify_its_minimap2:
     input: "itsx/{x}_ITSx.full.fasta"
     output: "minimap2/{x}_ITS_minimap2.paf"
+    threads: workflow.cores
     shell:
-        "minimap2 -cx map-ont -n 5 --secondary=no {dbs}/its-unite-sintax.mmi {input} > {output}"
+        "minimap2 -t {threads} -cx map-ont -n 5 --secondary=no {dbs}/its-unite-sintax.mmi {input} > {output}"
 
 rule classify_ssu_minimap2:
     input: "itsx/{x}_ITSx.SSU.fasta"
     output: "minimap2/{x}_SSU_minimap2.paf"
+    threads: workflow.cores
     shell:
-        "minimap2 -cx map-ont -n 5 --secondary=no {dbs}/ssu-silva-sintax.fa {input} > {output}"
+        "minimap2 -t {threads} -cx map-ont -n 5 --secondary=no {dbs}/ssu-silva-sintax.fa {input} > {output}"
+
+rule classify_coi_minimap2:
+    input: "prefiltered/{x}_filt.fa"
+    output: "minimap2/{x}_COI_minimap2.paf"
+    threads: workflow.cores
+    shell:
+        "minimap2 -t {threads} -cx map-ont -n 5 --secondary=no {dbs}/coi-bold.fa {input} > {output}"
 
     

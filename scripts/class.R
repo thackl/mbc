@@ -26,8 +26,8 @@ tidy_lineage <- function(x, col){
 
 ##----------------------------------------------------------------------------##
 setwd("fungi-classify")
-setwd("../../Frodo/n/")
-setwd("ting-20230821/m")
+setwd("Frodo/n/")
+setwd("../../ting-20230821/m")
 
 vsearch_files <- list.files(".", "*sintax.tsv")
 minimap_files <- list.files(".", "*.paf")
@@ -74,30 +74,23 @@ d1 |>
 # ggsankey
 # devtools::install_github("davidsjoberg/ggsankey")
 library(ggalluvial)
+library(ggrepel)
 
+d1
+da <- d1 |> filter(!str_detect(strategy, "minimap")) |> 
+  count(sample_id, region, strategy, k,p,c,o,f,g) |> 
+  arrange(k,p,c,o,f,g) |> 
+  mutate(across(k:g, \(.x) factor(.x, levels=unique(.x))))
+  
+ggplot(data = da, aes(axis1 = k, axis2 = p, axis3 = c, axis4=o, axis5=f, axis6=g, y = n)) +
+  scale_x_discrete(limits = c("k", "p", "c", "o", "f", "g"), expand = c(.2, .05)) +
+  geom_alluvium(aes(fill=k)) +
+  geom_stratum(na.rm = F) +
+  geom_text_repel(stat = "stratum", aes(label = after_stat(stratum)), size=2, 
+                  direction = "y", nudge_x = .3, min.segment.length = 0, max.overlaps = 100) +
+  facet_grid(sample_id ~ region)
+d1
 
-da <- d1 |> filter(region=="ITS" & strategy == "vsearch-sintax.tsv") |> 
-  count(k,p,c,o)
-
-ggplot(data = da, aes(axis1 = k, axis2 = p, axis3 = c, y = n)) +
-  scale_x_discrete(limits = c("k", "p", "c"), expand = c(.2, .05)) 
-  geom_alluvium()
-
-library(ggsankey)
-df <- mtcars |> 
-  make_long(cyl, vs, am, gear, carb)
-df <- d1 |> filter(region=="ITS" & strategy == "vsearch-sintax.tsv") |> make_long(k,p,c) 
-|> 
-  arrange(node) |>
-  mutate(next_node = factor(next_node, labels = unique(next_node)))
-
-
-ggplot(df, aes(x = x, 
-               next_x = next_x, 
-               node = node, 
-               next_node = next_node,
-               fill = factor(node))) +
-  geom_alluvial(flow.alpha = .6)
 # ITSx & seq stats
 
 ggplot() +
