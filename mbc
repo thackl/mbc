@@ -16,12 +16,12 @@ Options:
                           ../fungi.fq	ITS	2000	2500
                           /dat/bee.fa	COI	600	800		
                         
-  -m --marker MARKER    Currently supported are either a combination of SSU-ITS-LSU,
-                        or COI. A single marker is applied to all input files.
-                        Different markers for each input file need to be separated by
-                        ",". Supersedes markers listed in samples.tsv.
+  -m --marker MARKER    Currently supported are combination of SSU:ITS:LSU, or COI.
+                        A single marker/combination is applied to all input files.
+                        Different markers for each input file need to be separated
+                        by ",". Supersedes markers listed in samples.tsv.
   -l --min-length INT   Minimum/Maximum read length, comma-separated list for multiple
-  -L --max-length INT   files. Supersedes samples.tsv
+  -L --max-length INT   files. Supersedes samples.tsv.
                         
   -o --out DIR          Output directory [default: mbc-%Y%m%d-%H%M%S]
                         
@@ -56,10 +56,80 @@ if len(sys.argv) == 1:
 opt = docopt(__doc__, version='mbc v0.2.0', options_first=True)
 print(opt)
 
-# establish snakemake workflow and out dir
-out = time.strftime(opt["--out"])
-out = os.path.abspath(out)
-os.makedirs(out, exist_ok=True) 
+def main():
+    # establish snakemake workflow and out dir
+    out = time.strftime(opt["--out"])
+    out = os.path.abspath(out)
+    os.makedirs(out, exist_ok=True) 
+    
+    # prep samples file
+    if opt["--tsv"]:
+        df = pd.read_csv(opt["--tsv"], sep="\t")
+        df["#file"] = abs_path(df["#file"], os.path.dirname(opt["--tsv"]))
+    else:
+        df = pd.DataFrame(data={"#file": abs_path(opt["<sample.fx>"])},
+                          columns=["#file", "marker", "min_length", "max_length"])
+    
+    # get sample ids
+    files = [os.path.basename(file) for file in df["#file"]]
+    df["sample"] = [re.sub("\.[^.]+(\..z)?$", "", file) for file in files]
+    
+    if len(df) != len(set(df["sample"])):
+        sys.exit(f"Input files do not resolve to unique sample ids: {df['sample']}")
+             
+    # overwrite with command line option
+    for k in ["--marker", "--min-length", "--max-length"]:
+        if opt[k]:
+            v = opt[k].split(",")
+            if len(v) == 1 and len(df) > 1:
+                v = v * len(df)
+            elif len(v) != len(df):
+                sys.exit(f"option {k}={opt[k]} does not match the number of samples ({len(df)})")
+            df[k.replace("--", "").replace("-", "_")] = v
+    
+    if "marker" not in df:
+        sys.exit("marker specification via -m or samples.tsv is required")
+    
+    # TODO
+    # if "marker" not in /allowed markers/:
+    #    sys.exit("only ITS, ... supported")
+    allowed_markers = {"SSU", "ITS", "LSU", "COI"}
+    marker = set(flatten([x.split(":") for x in df["marker"]]))
+    marker.difference_update(allowed_markers)
+    if len(marker):
+        sys.exit(f"unsupported marker(s): {marker}")
+
+    
+    if "min_length" not in df:
+        df["min_length"] = [-1] * len(df)
+    
+    if "max_length" not in df:
+        df["max_length"] = [-1] * len(df)
+    
+    df["min_length"] = df["min_length"].fillna(-1)
+    df["max_length"] = df["max_length"].fillna(-1)
+    
+    print(df)
+    sys.exit()
+    df.to_csv(f"{out}/samples.tsv", index=False, sep="\t")
+    
+    # start workflow
+    wf_dir  = os.path.dirname(os.path.abspath(__file__))
+    
+    if opt["--setup-databases"]:
+        cmd='snakemake setup' + f' {opt["--snake"]} --config wf_dir={wf_dir}'
+        print(cmd)
+        subprocess.run(cmd, shell=True, cwd=wf_dir)
+        sys.exit()
+    
+    cmd='snakemake' + f' --directory {out} {opt["--snake"]} --config wf_dir={wf_dir}'
+    print(cmd)
+    subprocess.run(cmd, shell=True, cwd=wf_dir)
+    
+    cmd='csvtk pretty -tr seq-stats.tsv'
+    print("\nInput stats:\n")
+    subprocess.run(cmd, shell=True, cwd=out)
+
 
 def abs_path(paths, pre=False):
     r=[]
@@ -71,61 +141,8 @@ def abs_path(paths, pre=False):
         r.append(file)
     return(r)
 
-# prep samples file
-if opt["--tsv"]:
-    df = pd.read_csv(opt["--tsv"], sep="\t")
-    df["#file"] = abs_path(df["#file"], os.path.dirname(opt["--tsv"]))
-
-else:
-    df = pd.DataFrame(data={"#file": abs_path(opt["<sample.fx>"])},
-                      columns=["#file", "marker", "min_length", "max_length"])
-
-files = [os.path.basename(file) for file in df["#file"]]
-df["sample"] = [re.sub("\.[^.]+(\..z)?$", "", file) for file in files]
-
-if len(df) != len(set(df["sample"])):
-    sys.exit(f"Input files do not resolve to unique sample ids: {df['sample']}")
-         
-# overwrite with command line option
-for k in ["--marker", "--min-length", "--max-length"]:
-    if opt[k]:
-        v = opt[k].split(",")
-        if len(v) == 1:
-            [v] = [v] * len(df)
-        elif len(v) != len(df):
-            sys.exit(f"option {k}={opt[k]} does not match the number of samples ({len(df)})")
-        df[k.replace("--", "").replace("-", "_")] = v
-
-if "marker" not in df:
-    sys.exit("marker specification via -m or samples.tsv is required")
-
-# TODO
-# if "marker" not in /allowed markers/:
-#    sys.exit("only ITS, ... supported")
-
-if "min_length" not in df:
-    df["min_length"] = [-1] * len(df)
-
-if "max_length" not in df:
-    df["max_length"] = [-1] * len(df)
-        
-df.to_csv(f"{out}/samples.tsv", index=False, sep="\t")
-
-# start workflow
-wf_dir  = os.path.dirname(os.path.abspath(__file__))
-
-if opt["--setup-databases"]:
-    cmd='snakemake setup' + f' {opt["--snake"]} --config wf_dir={wf_dir}'
-    print(cmd)
-    subprocess.run(cmd, shell=True, cwd=wf_dir)
-    sys.exit()
-
-cmd='snakemake' + f' --directory {out} {opt["--snake"]} --config wf_dir={wf_dir}'
-print(cmd)
-subprocess.run(cmd, shell=True, cwd=wf_dir)
-
-cmd='csvtk pretty -tr seq-stats.tsv'
-print("\nInput stats:\n")
-subprocess.run(cmd, shell=True, cwd=out)
-
-
+def flatten(l):
+    return [item for sublist in l for item in sublist]
+    
+if __name__ == '__main__':
+    main()
