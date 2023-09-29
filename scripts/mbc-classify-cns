@@ -14,11 +14,14 @@ GetOptions (
     "min-coverage|c=f" =>  \(my $min_coverage = .80),
     "max-hits|n=i" => \(my $max_hits = 10),
     "help|h!" => \(my $help),
-    "debug|D!" => \(my $debug),
 ) or die("Error in command line arguments\n");
 
-if ($help || @ARGV > 2){
-    print "Usage: paf-cns.pl < in > out\n";
+# id identity coverage tax_id lineage
+
+if ($help || @ARGV != 1){
+    print "Usage:\n  classify .paf > .tsv\n\n";
+    print "Expects the last digits of the database hit to be an NCBI taxon id\n\n";
+    print "Options:\n";
     printf " %-19s  %s\n", "-o/--out", "write to this file [STDOUT]";
     printf " %-19s  %s\n", "-s/--lca-support", "Minimum fraction of hits supporting the top hit at each rank to accept";
     printf " %-19s  %s\n", "", "top assignment as consensus. `-s 1` gives classic LCA [$lca_support]";
@@ -26,28 +29,41 @@ if ($help || @ARGV > 2){
     printf " %-19s  %s\n", "-c/--min-coverage", "Minimum coverage of shorter of query/subject in alignment [$min_coverage]";
     printf " %-19s  %s\n", "-n/--max-hits", "Maximum number of hits to include in LCA computation [$max_hits]";
     printf " %-19s  %s\n", "-h/--help", "show this help";
-    printf " %-19s  %s\n", "-D/--debug", "show debug messages";
     exit 0;
 }
 
 # consensus taxonomy - similar to qiime vsearch consensus classifier
 # https://toolshed.g2.bx.psu.edu/repository/load_invalid_tool?repository_id=a43ea4908816827c&tool_config=qiime_feature-classifier_classify-consensus-vsearch.xml&changeset_revision=71f124e02000&render_repository_actions_for=tool_shed
+# https://microbiomejournal.biomedcentral.com/articles/10.1186/s40168-018-0470-z
+
+my %parser = (paf => \&parse_paf);
+my ($format) = $ARGV[0] =~ /([^.]+)$/;
+die "unknown format $format\n" unless exists($parser{$format});
+my $parser = $parser{$format};
+
+my $ifh;
+if($format eq "paf"){
+    # prepend paf with lineage based on taxid in db hit
+    open(IN, "cut -f6 $ARGV[0] | grep -oP '\\d+$' | taxonkit lineage | taxonkit reformat -P | cut -f3 | paste - $ARGV[0] |") or die $!;
+}else{ # could be for some other tsv
+    open(IN, $ARGV[0]) or die $!;
+}
+
 
 my $id = "";
 my @r = ();
 my @g = ();
 
 # loop file
-while (<>) {
-    my ($q, $ql, $qs, $qe, $st, $t, $tl, $ts, $te, $mm, $ml, $mq, $tags) = split("\t", $_, 13);
-    next if identity($tags) < $min_identity;
-    next if coverage($ql,$qs,$qe,$tl,$ts,$te) < $min_coverage;
+while (<IN>) {
+    my ($q, $idy, $cov, $tax_id, $lineage) = $parser->($_);
+    next if $idy < $min_identity or $cov < $min_coverage;
     if ($q ne $id){ # new group
         compute_lca(@g);
         $id = $q; # reset id and group
         @g = ();
     }
-    push @g, $t if @g <= $max_hits;
+    push @g, $lineage if @g <= $max_hits;
 }
 compute_lca(@g);
 
@@ -78,19 +94,28 @@ sub compute_lca{
 }
 
 # NOTE - this is lineage format dependent...
-sub taxa{    
-    my ($fields) = $_[0] =~ /\|([^|]+)$/;
-    split(",", $fields);
+sub taxa{ # expects lineage
+    split(";", $_[0]);
 }
 
-sub identity{
+sub paf_idy{
     my ($d) = $_[0] =~ /de:f:(\S+)/;
     1-$d;
 }
 
-sub coverage{
+sub paf_cov{
     my ($ql, $qs, $qe, $tl, $ts, $te) = @_;
     $ql < $tl
         ? ($qe-$qs+1)/$ql
         : ($te-$ts+1)/$tl;
 }
+
+sub parse_paf{
+    my ($lineage, $q, $ql, $qs, $qe, $st, $t, $tl, $ts, $te, $mm, $ml, $mq, $tags) = split("\t", $_[0] , 14);
+    my ($tax) = $t =~ /(\d+)$/;
+    return($q, paf_idy($tags), paf_cov($ql,$qs,$qe,$tl,$ts,$te), $tax, $lineage)
+}
+
+
+
+    
