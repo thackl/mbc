@@ -110,7 +110,6 @@ def main():
     df["max_length"] = df["max_length"].fillna(-1)
     
     print(df)
-    sys.exit()
     df.to_csv(f"{out}/samples.tsv", index=False, sep="\t")
     
     # start workflow

@@ -32,7 +32,24 @@ TODO: "Incertae sedis" should probably completely removed for this classifier?
 pv dbs/unite.fa | perl -pe 'if(/^>/){s/\|k__/;tax=k:/; s/\|/_/g; s/;(\w)__/,$1:/g; s/[^[:ascii:]]/X/g; s/,\w:Incertae sedis//g; s/ /_/g}' > unite-sintax.fa
 pv dbs/silva.fa | seqkit seq --rna2dna | perl -pe 'if(/^>/){s/k__/;tax=k:/; s/\|/_/g; s/;(\w)__/,$1:/g; s/[^[:ascii:]]/X/g,  s/,\w:Incertae sedis//g; s/ /_/g}' > ssu-silva-sintax.fa
 #+end_src
+*** Silva NCBI tax ids
+Use truncated SSU/LSU, add NCBI taxid for efficient classification. Species are
+same in both taxonomies, or at least taxonkit can map to SILVA species.
 
+#+begin_src sh
+wget https://www.arb-silva.de/fileadmin/silva_databases/release_138_1/Exports/SILVA_138.1_SSURef_NR99_tax_silva_trunc.fasta.gz
+wget https://www.arb-silva.de/fileadmin/silva_databases/release_138_1/Exports/taxonomy/taxmap_slv_ssu_ref_nr_138.1.txt.gz
+wget https://www.arb-silva.de/fileadmin/silva_databases/release_138_1/Exports/taxonomy/ncbi/taxmap_ncbi_ssu_ref_nr99_138.1.txt.gz
+
+wget https://www.arb-silva.de/fileadmin/silva_databases/release_138_1/Exports/taxonomy/ncbi/tax_ncbi_ssu_ref_nr99_138.1.txt.gz
+
+# this doesn't fully work because a few tax names are ambigious and name2taxid return multiple taxids...
+SILVA_138.1_SSURef_NR99_tax_silva_trunc.fasta.gz
+paste 
+  <(seqkit fx2tab SILVA_138.1_SSURef_NR99_tax_silva_trunc.fasta.gz)
+  <(zcat SILVA_138.1_SSURef_NR99_tax_silva_trunc.fasta.gz | grep '^>' | grep -oP '[^;]+$' | sed 's/ (.*//' | taxonkit name2taxid | cut -f2) |
+  tsvtk cut -f1,4,2 | sed 's/\t/|/' | seqkit tab2fx | seqkit seq --rna2dna > mbc-SSU-silva.fa
+#+end_src
 
 *** FRODO database - clean and reformat
 - [X] remove ITSx problematic operons
@@ -75,6 +92,38 @@ perl -pe 'if(/^>/){s/ .*lineage=k__/;tax=k:/; s/;(\w)__/,$1:/g; s/[^[:ascii:]]/X
 
 seq-error -e 7,1,2 frodo.fa > frodo-err10.fa 
 seq-error -e 4,.5,.5 frodo.fa > frodo-err05.fa
+
+#+end_src
+
+*** BOLD
+All sorts of markers (COI, rbcL, matK) and marker versions (COI-5P, COI-3P,
+...). A total of 152 marker categories.
+
+Also redundant, e.g. 58k human markers...
+
+Download form homepage. One fasta with every marker and redundancy. Need to
+clean up.
+
+BOLD IDs:
+- format: =id-pre|marker|location|lineage=
+- lineages can contain spaces, so not a good format
+- remove for actual database
+- same ID-pre with multiple markers (ZYIII011-22|28S|Australia, ZYIII011-22|COI-5P|Australia) => keep marker in ID
+BOLD lineages:
+- they don't full map onto NCBI
+- they are consistent at 9 levels (K,p,c,o,f,F,g,s,t) (k=domain/superkingdom, K=kingdom, F=subfamily, t=strain)
+- split at "," but note: a very few species contain ",", so only robust down to genus
+
+TODO: how to handle missing taxa: "None" in BOLD
+
+#+begin_src sh
+# clean up headers
+zcat BOLD_Public.25-Sep-2023.fa.xz |
+  ../../scripts/db-bold-clean -l bold.tsv > bold.fa
+
+# splitting only works with IDs w/o lineage because lineages with spaces cause truncated IDs...
+seq-split bold.fa <(perl -ne 'if(/^>/){($marker) = /\|([^|]+)/; print substr($_, 2, -1), "\t", $marker, "\n"}' bold.fa)
+
 
 #+end_src
 

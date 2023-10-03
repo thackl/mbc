@@ -14,21 +14,28 @@ GetOptions (
     "min-coverage|c=f" =>  \(my $min_coverage = .80),
     "max-hits|n=i" => \(my $max_hits = 10),
     "help|h!" => \(my $help),
+    "debug|D!" => \(my $debug)
 ) or die("Error in command line arguments\n");
+ 
 
-# id identity coverage tax_id lineage
-
-if ($help || @ARGV != 1){
-    print "Usage:\n  classify .paf > .tsv\n\n";
-    print "Expects the last digits of the database hit to be an NCBI taxon id\n\n";
-    print "Options:\n";
-    printf " %-19s  %s\n", "-o/--out", "write to this file [STDOUT]";
+if ($help || @ARGV != 2){
+    printf "Usage:\n  classify <lineages.tsv> <mapping.paf> > <assignment.tsv>\n\n";
+    printf "Input:\n";
+    printf " %-19s  %s\n", "lineages.tsv", "Tab-separated file mapping query IDs to lineages";
+    printf " %-19s  %s\n", "", "Columns: ID, lineage (k__superkingdom;p__phylum;c__class;f__...)";
+    printf " %-19s  %s\n", "mapping.paf", "minimap2 mapping file, parses `de:f` tag for identity.";
+    printf " %-19s  %s\n", "", "Don't split index to ensure all hits of one query in one consective block";
+    printf "\n";
+    printf "Options:\n";
+    printf " %-19s  %s\n", "-o/--out", "Tab-separated file with classification assignments [STDOUT]";
+    printf " %-19s  %s\n", "", "Columns: ID, top-hit-identity, top-hit-coverage, consensus-lineage";
     printf " %-19s  %s\n", "-s/--lca-support", "Minimum fraction of hits supporting the top hit at each rank to accept";
     printf " %-19s  %s\n", "", "top assignment as consensus. `-s 1` gives classic LCA [$lca_support]";
     printf " %-19s  %s\n", "-p/--min-identity", "Minimum idenity for hits to be considered [$min_identity]";
     printf " %-19s  %s\n", "-c/--min-coverage", "Minimum coverage of shorter of query/subject in alignment [$min_coverage]";
     printf " %-19s  %s\n", "-n/--max-hits", "Maximum number of hits to include in LCA computation [$max_hits]";
-    printf " %-19s  %s\n", "-h/--help", "show this help";
+    printf " %-19s  %s\n", "-h/--help", "Show this help";
+    printf " %-19s  %s\n", "-D/--debug", "Log verbose info";
     exit 0;
 }
 
@@ -36,41 +43,84 @@ if ($help || @ARGV != 1){
 # https://toolshed.g2.bx.psu.edu/repository/load_invalid_tool?repository_id=a43ea4908816827c&tool_config=qiime_feature-classifier_classify-consensus-vsearch.xml&changeset_revision=71f124e02000&render_repository_actions_for=tool_shed
 # https://microbiomejournal.biomedcentral.com/articles/10.1186/s40168-018-0470-z
 
-my %parser = (paf => \&parse_paf);
-my ($format) = $ARGV[0] =~ /([^.]+)$/;
+my %parser = (
+    paf => \&parse_paf,
+    paftaxid => \&parse_paftaxid
+);
+my $lineages = $ARGV[0];
+my $paf = $ARGV[1];
+my ($format) = $paf =~ /([^.]+)$/;
 die "unknown format $format\n" unless exists($parser{$format});
 my $parser = $parser{$format};
 
 my $ifh;
+my $xf;
+my %lineages;
 if($format eq "paf"){
+    # map IDs in paf to lineages from dictionary
+    die "lineages file required for $format" unless defined($lineages);
+    print STDERR "Loading taxonomy from $lineages:\n";
+    open($xf, $lineages) or die $!;
+    while(<$xf>){
+        print STDERR "\r$." unless $. % 1000;    
+        chomp();
+        my($id, $lineage) = split("\t");
+        $lineages{$id} = $lineage;
+    }
+    print STDERR "\r$.\n\n";
+    close($xf);
+    open(IN, $paf) or die $!;
+}elsif($format eq "paftaxid"){
     # prepend paf with lineage based on taxid in db hit
-    open(IN, "cut -f6 $ARGV[0] | grep -oP '\\d+$' | taxonkit lineage | taxonkit reformat -P | cut -f3 | paste - $ARGV[0] |") or die $!;
+    open(IN, "cut -f6 $paf | grep -oP '\\d+$' | taxonkit lineage | taxonkit reformat -P | cut -f3 | paste - $paf |") or die $!;
 }else{ # could be for some other tsv
-    open(IN, $ARGV[0]) or die $!;
+    open(IN, $paf) or die $!;
 }
 
 
 my $id = "";
 my @r = ();
-my @g = ();
-
+my @ids = ();
+my @cov = ();
+my @idy = ();
+my @lin = ();
+my $n = 0;
 # loop file
+print STDERR "Classifying queries:\n";
 while (<IN>) {
-    my ($q, $idy, $cov, $tax_id, $lineage) = $parser->($_);
+    my ($q, $idy, $cov, $lineage) = $parser->($_);
     next if $idy < $min_identity or $cov < $min_coverage;
-    if ($q ne $id){ # new group
-        compute_lca(@g);
-        $id = $q; # reset id and group
-        @g = ();
-    }
-    push @g, $lineage if @g <= $max_hits;
-}
-compute_lca(@g);
 
+    if ($q ne $id){ # new group
+        $n++;
+        print STDERR "\r $n" unless $n % 1000;
+        compute_lca(\@ids, \@idy, \@cov, \@lin);
+        
+        $id = $q; # reset id and group
+        @ids = @idy = @cov = @lin = ();
+    }
+    if(@ids < $max_hits){
+        push @ids, $q;
+        push @idy, $idy;
+        push @cov, $cov;
+        push @lin, $lineage;
+    }
+}
+
+compute_lca(\@ids, \@idy, \@cov, \@lin);
+print STDERR ("\r $n\n");
+close(IN);
 
 sub compute_lca{
-    my ($top_rec, @sup_rec) = @_;
-    return unless $top_rec; # empty group
+    my ($ids, $idy, $cov, $lin) = @_;
+    return unless @$ids; # empty group (can happen at start)
+   
+    if(@$ids == 1){ # singleton group
+        printf "%s\t%0.4f\t%0.4f\t%s\n",$ids->[0], $idy->[0], $cov->[0], $lin->[0];
+        return;
+    }
+    
+    my ($top_rec, @sup_rec) = @$lin;
     my @top_tax = taxa($top_rec);
     return @top_tax unless @sup_rec+0; # single hit
     my @sup_tax = map{[taxa($_)]}@sup_rec;
@@ -87,10 +137,14 @@ sub compute_lca{
         push @tax, $top;
     }
 
-    print "C ", join(";", @tax),"\n";
-    print "T ", join(";", @top_tax),"\n";
-    print "S ", join(";", @$_), "\n" for @sup_tax;
-    print "\n";
+    printf "%s\t%0.4f\t%0.4f\t%s\n",$ids->[0], $idy->[0], $cov->[0], join(";", @tax);
+    if($debug){
+        printf STDERR "C\t%0.3f\t%0.3f\t%s\n", 0, 0, join(";", @tax);
+        printf STDERR "T\t%0.3f\t%0.3f\t%s\n", $idy->[0], $cov->[0], join(";", @top_tax);
+        for (my $i=1; $i<@sup_tax; $i++){
+            printf STDERR "S\t%0.3f\t%0.3f\t%s\n", $idy->[$i], $cov->[$i], join(";", @{$sup_tax[$i]});
+        }
+    }
 }
 
 # NOTE - this is lineage format dependent...
@@ -106,16 +160,21 @@ sub paf_idy{
 sub paf_cov{
     my ($ql, $qs, $qe, $tl, $ts, $te) = @_;
     $ql < $tl
-        ? ($qe-$qs+1)/$ql
-        : ($te-$ts+1)/$tl;
+        ? ($qe-$qs)/$ql
+        : ($te-$ts)/$tl;
 }
 
 sub parse_paf{
-    my ($lineage, $q, $ql, $qs, $qe, $st, $t, $tl, $ts, $te, $mm, $ml, $mq, $tags) = split("\t", $_[0] , 14);
-    my ($tax) = $t =~ /(\d+)$/;
-    return($q, paf_idy($tags), paf_cov($ql,$qs,$qe,$tl,$ts,$te), $tax, $lineage)
+    my ($q, $ql, $qs, $qe, $st, $t, $tl, $ts, $te, $mm, $ml, $mq, $tags) = split("\t", $_[0] , 13);
+    die "Lineage for $q missing in $lineages\n" unless exists($lineages{$t});
+    return($q, paf_idy($tags), paf_cov($ql,$qs,$qe,$tl,$ts,$te), $lineages{$t})
 }
 
+sub parse_paftaxid{
+    my ($lineage, $q, $ql, $qs, $qe, $st, $t, $tl, $ts, $te, $mm, $ml, $mq, $tags) = split("\t", $_[0] , 14);
+    my ($tax) = $t =~ /(\d+)$/;
+    return($q, paf_idy($tags), paf_cov($ql,$qs,$qe,$tl,$ts,$te), $lineage)
+}
 
 
     

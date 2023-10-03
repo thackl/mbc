@@ -1,2 +1,16 @@
 db_dir: "databases" # relative to workflow base or absolute
-itsx: "--detailed_results T --heuristics T -t f,t --save_regions SSU,ITS1,5.8S,ITS2,LSU" 
+itsx: "--detailed_results T --heuristics T -t f,t --save_regions SSU,ITS1,5.8S,ITS2,LSU"
+
+# marker specific settings
+ITS:
+  minimap2:
+    db: "mbc-ITS-unite.mmi"
+    op: "-cx map-ont -n 5 -p 0.8 -N 10"  # assume ONT reads, keep up to 10 hits with 80% of best hit. Later used in consensus classification
+SSU:
+  minimap2:
+    db: "mbc-SSU-silva.mmi"
+    op: "-cx map-ont -n 5 -p 0.8 -N 10"  # assume ONT reads, keep up to 10 hits with 80% of best hit. Later used in consensus classification
+COI:
+  lineages:    "BOLD/bold.tsv"
+  minimap2_db: "BOLD/bold.mmi"
+  minimap2_op: "-cx map-ont -n 5 -p 0.8 -N 10"  # assume ONT reads, keep up to 10 hits with 80% of best hit. Later used in consensus classification

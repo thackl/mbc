@@ -100,21 +100,32 @@ rule classify_its_minimap2:
     input: "itsx/{x}_ITSx.full.fasta"
     output: "minimap2/{x}_ITS_minimap2.paf"
     threads: workflow.cores
+    params: config["ITS"]["minimap2"]
     shell:
-        "minimap2 -t {threads} -cx map-ont -n 5 --secondary=no {dbs}/its-unite-sintax.mmi {input} > {output}"
+        "minimap2 -t {threads} {params.op} {dbs}/{params.db} {input} > {output}"
 
 rule classify_ssu_minimap2:
     input: "itsx/{x}_ITSx.SSU.fasta"
     output: "minimap2/{x}_SSU_minimap2.paf"
     threads: workflow.cores
+    params: config["SSU"]["minimap2"]
     shell:
-        "minimap2 -t {threads} -cx map-ont -n 5 --secondary=no {dbs}/ssu-silva-sintax.fa {input} > {output}"
+        "minimap2 -t {threads} {params.op} {dbs}/{params.db} {input} > {output}"
 
 rule classify_coi_minimap2:
     input: "prefiltered/{x}_filt.fa"
-    output: "minimap2/{x}_COI_minimap2.paf"
+    output:
+        paf="minimap2/{x}_COI_minimap2.paf",
+        tsv="{x}_classify.tsv"
     threads: workflow.cores
+    params:
+        db=config["COI"]["minimap2_db"],
+        op=config["COI"]["minimap2_op"],
+        tx=config["COI"]["lineages"]
     shell:
-        "minimap2 -t {threads} -cx map-ont -n 5 --secondary=no {dbs}/coi-bold.fa {input} > {output}"
+        "minimap2 -t {threads} {params.op} {dbs}/{params.db} {input} > {output.paf};"
+        "{scripts}/mbc-classify-cns {dbs}/{params.tx} {output.paf} > {output.tsv}"
+
+
 
     
