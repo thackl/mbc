@@ -18,18 +18,17 @@ Usage:
 ./mbc [options] --setup-databases             # NOT YET WORKING!!!
 #+end_src
 
-*=samples.tsv=:*
-
-A tab-separted table with info on each sample. The header is required. Paths to
+** Input
+- =samples.tsv= :: tab-separted table with info on each sample. The header is required. Paths to
 files can be relative to sample.tsv or absolute. For example:
 
-#+begin_export ascii
+#+begin_src
 #file	marker	min_length	max_length
 ../fungi.fq	ITS	2000	2500
 /dat/bee.fa	COI	600	800
-#+end_export
+#+end_src
 
-*marker:* Currently supported are combination of SSU:ITS:LSU, or COI.  A single
+- marker :: Currently supported are combination of SSU:ITS:LSU, or COI.  A single
  marker/combination is applied to all input files.  Different markers for each
  input file need to be separated by ",". Supersedes markers listed in
  samples.tsv.
@@ -40,7 +39,7 @@ See [[Known issues]] and https://github.com/thackl/mbc/issues for questions, pro
 
 ** Output
 The pipeline produces the following final files in =results/=:
-- =<sample_id>_classified.tsv= - tab-separated file with one line per classified query with the fields:
+- =<sample_id>_classified.tsv= :: tab-separated file with one line per classified query with the fields:
   =query_id, query_tophit_identity, query_tophit_coverage, query_tophits_consensus_lineage=
 
 
