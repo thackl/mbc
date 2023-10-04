@@ -1,0 +1,82 @@
+** Usage
+
+#+begin_src sh
+# download workflow
+git clone https://github.com/thackl/mbc
+cd mcb
+
+# install dependencies via conda or mamba (https://github.com/conda-forge/miniforge)
+mamba create -n 
+mamba activate mbc
+mamba env update --file env.yaml
+
+# run mbc
+Usage:
+./mbc -h                                      # show help
+./mbc [options] -m marker <sample.fx> ...
+./mbc [options] [-m marker] -t samples.tsv
+./mbc [options] --setup-databases             # NOT YET WORKING!!!
+#+end_src
+
+*=samples.tsv=:*
+
+A tab-separted table with info on each sample. The header is required. Paths to
+files can be relative to sample.tsv or absolute. For example:
+
+#+begin_export ascii
+#file	marker	min_length	max_length
+../fungi.fq	ITS	2000	2500
+/dat/bee.fa	COI	600	800
+#+end_export
+
+*marker:* Currently supported are combination of SSU:ITS:LSU, or COI.  A single
+ marker/combination is applied to all input files.  Different markers for each
+ input file need to be separated by ",". Supersedes markers listed in
+ samples.tsv.
+
+See [[Advanced database setup]] for alternatives and customization of databases.
+
+See [[Known issues]] and https://github.com/thackl/mbc/issues for questions, problems or feedback.
+
+** Output
+The pipeline produces the following final files in =results/=:
+- =<sample_id>_classified.tsv= - tab-separated file with one line per classified query with the fields:
+  =query_id, query_tophit_identity, query_tophit_coverage, query_tophits_consensus_lineage=
+
+
+** Advanced database setup
+
+TODO
+
+If you need *databases in a different location* you can adjust =db_dir= in
+=config.yaml= to whatever suits your system.
+
+If you prefer to *handle downloads manually or use existing files*, copy any
+file you don't want mbc to download automatically into =databases/= (or
+the respective =config.yaml/db_dir=) before running =--setup-databases=.
+
+Note though, unless you add =--notemp= to the =--snake=-arguments, all but the
+final diamond-formatted database files will be deleted from =databases/= at the
+end of the setup phase.
+
+#+begin_src sh
+cd databases/
+
+# Latest RVDB
+url=https://rvdb-prot.pasteur.fr/ && 
+db=$(curl -fs $url | grep -oPm1 'files/U-RVDBv[0-9.]+-prot.fasta.xz')
+curl $url/$db -o rvdb100.faa.xz
+
+# UniRef50
+wget https://ftp.uniprot.org/pub/databases/uniprot/uniref/uniref50/uniref50.fasta.gz
+
+# NCBI taxonomy stuff
+wget https://ftp.ncbi.nlm.nih.gov/pub/taxonomy/accession2taxid/prot.accession2taxid.FULL.gz
+wget https://ftp.ncbi.nih.gov/pub/taxonomy/taxdump.tar.gz
+tar -xzf taxdump.tar.gz nodes.dmp names.dmp
+#+end_src
+
+
+** Known issues
+
+None known
